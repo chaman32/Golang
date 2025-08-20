@@ -1,5 +1,3 @@
-module example.com/hello
+module github.com/pluralsight/webservice
 
-go 1.13
-
-require rsc.io/quote v1.5.2
+go 1.24.5
