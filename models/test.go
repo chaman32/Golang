@@ -1,7 +1,91 @@
+// Got it — here’s what the task is asking, in plain Go terms, plus a small blueprint you can start from.
+
+// What you’re building
+
+// A key–value store server that can speak over TCP (a simple line-based protocol) and optionally over HTTP if the user passes an -http flag.
+// The TCP server stays connected and processes multiple newline-terminated requests per connection.
+
+// Command-line flags
+
+// -tcp <PORT> → start the TCP API on this port (e.g., -tcp 4000). If omitted, no TCP listener.
+
+// -http <ADDR> → start the HTTP API on this address (e.g., -http :8080). If omitted, skip HTTP entirely.
+
+// Shared data model
+
+// A concurrent in-memory KV store. (Use sync.Map or a map[string]string guarded by a sync.RWMutex.)
+
+// TCP text protocol
+
+// Request line format (newline terminated):
+// REQUEST_ID|OPERATION|KEY|VALUE\n
+
+// REQUEST_ID → opaque string you echo back.
+
+// OPERATION → one of GET, SET, DELETE.
+
+// KEY → string key.
+
+// VALUE → only for SET. For GET/DELETE this field may be empty or omitted (see notes below).
+
+// Response line format:
+// REQUEST_ID|RESULT|VALUE\n
+
+// RESULT ∈ OK, NOTFOUND, ERROR
+
+// VALUE → present only when returning a value (i.e., GET that found the key). For OK on SET/DELETE, value is empty.
+
+// Connection semantics: keep the TCP connection open; process requests line-by-line until the client closes it or the server shuts down.
+
+// Parsing notes / errors
+
+// Split on |, trim the trailing \n.
+
+// Minimal validation:
+
+// GET requires at least 3 fields (id, op, key).
+
+// SET requires 4 fields (value required).
+
+// DELETE requires at least 3 fields.
+
+// On malformed input or unknown op: REQUEST_ID|ERROR| (empty value).
+
+// Result rules by operation
+
+// SET key value → store/overwrite; respond id|OK|
+
+// GET key
+
+// if present → id|OK|<value>
+
+// if missing → id|NOTFOUND|
+
+// DELETE key
+
+// if present → delete and id|OK|
+
+// if missing → id|NOTFOUND|
+
+// Concurrency model
+
+// One goroutine per accepted TCP connection.
+
+// Inside each connection, scan lines with bufio.Scanner and handle sequentially.
+
+// Store is shared across connections; protect it for concurrent access.
+
+// Graceful shutdown
+
+// Trap SIGINT/SIGTERM, close listeners, and let active handlers finish.
+
+// For TCP, closing the listener unblocks Accept. For HTTP, call Server.Shutdown(ctx).
+
+// Example I/O
+
+// Client sends (four lines, same connection):
+
 package models
-
-
-package main
 
 import (
 	"bufio"
@@ -11,7 +95,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/signal"
 	"strings"
 	"sync"
