@@ -1,0 +1,19 @@
+func (uc *userController) parseRequest(r *http.Request) (models.User, error) {
+    // ...existing code...
+    
+    // Read the entire body at once
+    body, err := io.ReadAll(r.Body)
+    if err != nil {
+        return models.User{}, fmt.Errorf("failed to read request body: %w", err)
+    }
+    defer r.Body.Close() // Ensure body is closed
+    
+    var u models.User
+    err = json.Unmarshal(body, &u) // Parse complete JSON in memory
+    if err != nil {
+        return models.User{}, fmt.Errorf("failed to parse JSON: %w", err)
+    }
+    
+    return u, nil
+    // ...existing code...
+}
