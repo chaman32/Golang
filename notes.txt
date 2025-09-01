@@ -1,221 +1,158 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
+	"bufio"
+	"context"
 	"fmt"
-	"io"
 	"kvstore/internal/service"
 	"log"
-	"net/http"
-
+	"net"
+	"os/signal"
 	"strconv"
+	"strings"
+	"sync"
+	"syscall"
 )
 
-// type controller struct {
-// 	userIDPattern *regexp.Regexp
-// }
-
-func registerHandlers() {
-	//sc := newStoreHandler()
-	//http.Handle("/store", sc)
-	//http.Handle("/store/", sc)
-	http.HandleFunc("GET /store/{id}", getHandler)
-}
-
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Message string `json:"message"`
-}
-
-func encodeResponseAsJSON(data interface{}, w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	enc := json.NewEncoder(w)
-	if err := enc.Encode(data); err != nil {
-		log.Println("encodeResponseAsJSON:", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-	}
-}
-
-// func newStoreHandler() *controller {
-// 	return &controller{
-// 		userIDPattern: regexp.MustCompile(`^/store/(\d+)/?`),
-// 	}
-// }
-
-// func (c *controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-// 	if r.URL.Path == "/store" {
-// 		switch r.Method {
-// 		case http.MethodGet:
-// 			//uc.getValue(w, r)
-// 		case http.MethodPost:
-// 			c.post(w, r)
-// 		default:
-// 			w.WriteHeader(http.StatusNotImplemented)
-// 		}
-// 	} else {
-// 		matches := c.userIDPattern.FindStringSubmatch(r.URL.Path)
-// 		if len(matches) == 0 {
-// 			w.WriteHeader(http.StatusNotFound)
-// 			return
-// 		}
-// 		id, err := strconv.Atoi(matches[1])
-// 		if err != nil {
-// 			w.WriteHeader(http.StatusNotFound)
-// 			return
-// 		}
-// 		switch r.Method {
-// 		case http.MethodGet:
-// 			c.get(id, w)
-// 		case http.MethodPut:
-// 		//	uc.put(id, w, r)
-// 		case http.MethodDelete:
-// 			c.delete(id, w)
-// 		default:
-// 			w.WriteHeader(http.StatusNotImplemented)
-// 		}
-
-// 	}
-// }
-
-func getHandler(w http.ResponseWriter, r *http.Request) {
-
-	stringId := r.PathValue("id")
-	id, err := strconv.Atoi(stringId)
-
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	data, err := service.Get(id)
-	if err != nil {
-		if errors.Is(err, service.ErrUserNotFound) {
-			w.WriteHeader(http.StatusNotFound)
-			errorResp := ErrorResponse{
-				Error:   "not found",
-				Message: err.Error(),
-			}
-			encodeResponseAsJSON(errorResp, w)
+func handleConn(conn net.Conn) {
+	defer conn.Close()
+	sc := bufio.NewScanner(conn)
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r\n")
+		id, result, value := processLine(line)
+		if _, err := fmt.Fprintf(conn, "%s|%s|%s\n", id, result, value); err != nil {
 			return
 		}
-		// other errors
-		w.WriteHeader(http.StatusInternalServerError)
-		errorResp := ErrorResponse{
-			Error:   "internal_error",
-			Message: "An internal error occured",
-		}
-		encodeResponseAsJSON(errorResp, w)
-		return
-
 	}
-	encodeResponseAsJSON(data, w)
-
 }
 
-// func (c *controller) get(id int, w http.ResponseWriter) {
-// 	data, err := service.Get(id)
-// 	if err != nil {
-// 		if errors.Is(err, service.ErrUserNotFound) {
-// 			w.WriteHeader(http.StatusNotFound)
-// 			errorResp := ErrorResponse{
-// 				Error:   "not found",
-// 				Message: err.Error(),
-// 			}
-// 			encodeResponseAsJSON(errorResp, w)
-// 			return
-// 		}
-// 		// other errors
-// 		w.WriteHeader(http.StatusInternalServerError)
-// 		errorResp := ErrorResponse{
-// 			Error:   "internal_error",
-// 			Message: "An internal error occured",
-// 		}
-// 		encodeResponseAsJSON(errorResp, w)
-// 		return
-
-// 	}
-// 	encodeResponseAsJSON(data, w)
-// }
-
-// func (c *controller) post(w http.ResponseWriter, r *http.Request) {
-// 	data, err := c.parseRequest(r)
-// 	if err != nil {
-// 		w.WriteHeader(http.StatusBadRequest)
-// 		errorResp := ErrorResponse{
-// 			Error:   "invalid_request",
-// 			Message: err.Error(),
-// 		}
-// 		encodeResponseAsJSON(errorResp, w)
-// 		return
-// 	}
-
-// 	data, err = service.Set(data)
-// 	if err != nil {
-// 		if errors.Is(err, service.ErrValidation) {
-// 			w.WriteHeader(http.StatusBadRequest)
-// 			errorResp := ErrorResponse{
-// 				Error:   "validation_error",
-// 				Message: err.Error(),
-// 			}
-// 			encodeResponseAsJSON(errorResp, w)
-// 			return
-// 		}
-// 		// other errors
-// 		w.WriteHeader(http.StatusInternalServerError)
-// 		errorResp := ErrorResponse{
-// 			Error:   "internal_error",
-// 			Message: "An internal error occurred",
-// 		}
-// 		encodeResponseAsJSON(errorResp, w)
-// 		return
-// 	}
-
-// 	w.WriteHeader(http.StatusCreated)
-// 	encodeResponseAsJSON(data, w)
-// }
-
-// func (c *controller) delete(id int, w http.ResponseWriter) {
-// 	_, err := service.Delete(id)
-// 	if err != nil {
-// 		if errors.Is(err, service.ErrUserNotFound) {
-
-// 			errorResp := ErrorResponse{
-// 				Error:   "not_found",
-// 				Message: err.Error(),
-// 			}
-
-// 			w.WriteHeader(http.StatusNotFound)
-// 			encodeResponseAsJSON(errorResp, w)
-
-// 			return
-// 		}
-// 	}
-// 	w.WriteHeader(http.StatusOK)
-// }
-
-func parseRequest(r *http.Request) (service.Data, error) {
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return service.Data{}, fmt.Errorf("failed to read request body: %w", err)
+func processLine(line string) (id, result, value string) {
+	parts := strings.Split(line, "|")
+	// Ensure at least id + op + key
+	if len(parts) < 3 {
+		return safeIdx(parts, 0), "ERROR", ""
 	}
+	id = parts[0]
+	op := strings.ToUpper(parts[1])
+	key := parts[2]
+	data := parts[3]
 
-	var u service.Data
-	err = json.Unmarshal(body, &u)
-	if err != nil {
-		return service.Data{}, fmt.Errorf("failed to parse JSON: %w", err)
+	log.Print("key ", key)
+
+	switch op {
+	case "GET":
+
+		return get(key, id)
+
+	case "SET":
+		return set(parts, id, data)
+
+	case "DELETE":
+		return delete(key, id)
+
+	default:
+		return id, "ERROR", ""
 	}
-
-	return u, nil
 }
 
-func InitHttpServer(addr string) {
-	registerHandlers()
+func delete(key string, rid string) (id, result, value string) {
+	if key == "" {
+		return rid, "ERROR", ""
+	}
+	k, err := strconv.Atoi(key)
+	if err != nil {
+		return rid, "ERROR", ""
+	}
+
+	v, _ := service.Delete(k)
+	if v {
+		return rid, "OK", ""
+	}
+	return rid, "NOTFOUND", ""
+}
+
+func set(parts []string, rid string, data string) (id, result, value string) {
+	if len(parts) < 4 {
+		return rid, "ERROR", ""
+	}
+	v, err := service.Set(service.Data{Id: 0, Value: data})
+	if err != nil {
+		return rid, "ERROR", ""
+	}
+
+	return rid, "OK", strconv.Itoa(v.Id)
+}
+
+func get(key, rid string) (id, result, value string) {
+	if key == "" {
+		return rid, "ERROR", ""
+	}
+
+	k, err := strconv.Atoi(key)
+	if err != nil {
+		return rid, "ERROR", ""
+	}
+
+	d, err := service.Get(k)
+	if err != nil {
+
+		return rid, "NOTFOUND", ""
+	}
+	return rid, "OK", d.Value
+}
+
+func safeIdx(parts []string, i int) string {
+	if i < len(parts) {
+		return parts[i]
+	}
+	return ""
+}
+
+func InitTcpServer(tcpPort string) {
+
 	service.Init()
-	log.Println("Server listening on", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Println("Error starting server:", err)
-	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var wg sync.WaitGroup
+
+	ln, err := net.Listen("tcp", tcpPort)
+	
+	if err != nil {
+		log.Fatalf("TCP listen error: %v", err)
+	}
+	log.Printf("TCP listening on %s", tcpPort)
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		defer ln.Close()
+		for {
+			conn, err := ln.Accept()
+
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("Accept error: %v", err)
+				continue
+			}
+			go handleConn(conn)
+
+		}
+
+	}()
+
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+
+	}()
+
+	<-ctx.Done()
+	log.Println("Shutting down…")
+	wg.Wait()
+	log.Println("Bye.")
 }
