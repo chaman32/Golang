@@ -1,254 +1,246 @@
-package api
+The file you’re looking at (Task 1d - Automated Tests) is part of a Go bootcamp. The idea of this task is:
+
+🔹 What the task is asking
+
+You need to add automated tests to the Go project you’re working on.
+
+The tests should cover all the main operations in your code.
+
+You can decide whether to write:
+
+Integration-style tests → run tests against your "top-level" handlers (e.g., REST endpoints, TCP handlers, etc.) with a store instance behind them.
+
+Unit-style tests → test smaller functions and handlers separately, mocking dependencies.
+
+Basically: prove that your code works automatically, not by manually running it.
+
+🔹 Requirements
+
+Everything should be tested.
+
+You don’t have to follow one single testing style, but you should ensure good coverage.
+
+🔹 Hints (helpful tips)
+
+The hints are there because in Go it’s common to hit issues when testing concurrency or networking code. They suggest:
+
+If you’re using a global variable for your "store" (database, memory map, etc.), tests may interfere with each other when run at the same time.
+👉 Solution: use a fresh store instance for each test.
+
+For testing HTTP handlers: use
+
+
+
+_______________________________________
+copilot:
+
+Based on your bootcamp requirements, here are the main approaches for testing your handlers in Go:
+
+1. Integration-Style Testing (Test Full Flow)
+Test your HTTP handlers with real store instances:
+
+// user_test.go
+package main
 
 import (
-	"bufio"
-	"context"
-	"fmt"
-	"kvstore/internal/service"
-	"log"
-	"net"
-	"os/signal"
-	"strconv"
-	"strings"
-	"sync"
-	"syscall"
+    "bytes"
+    "encoding/json"
+    "net/http"
+    "net/http/httptest"
+    "testing"
 )
 
-func handleConn(conn net.Conn) {
-	defer conn.Close()
-	sc := bufio.NewScanner(conn)
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r\n")
-		id, result, value := processLine(line)
-		if _, err := fmt.Fprintf(conn, "%s|%s|%s\n", id, result, value); err != nil {
-			return
-		}
-	}
+func TestUserHandlers_Integration(t *testing.T) {
+    // Create fresh store for each test to avoid interference
+    store := NewUserStore() // or reset global store
+    
+    t.Run("POST /users creates user", func(t *testing.T) {
+        user := User{FirstName: "John", LastName: "Doe"}
+        jsonData, _ := json.Marshal(user)
+        
+        req := httptest.NewRequest("POST", "/users", bytes.NewBuffer(jsonData))
+        w := httptest.NewRecorder()
+        
+        postHandler(w, req) // Your actual handler
+        
+        if w.Code != http.StatusCreated {
+            t.Errorf("expected status 201, got %d", w.Code)
+        }
+        
+        var response User
+        json.Unmarshal(w.Body.Bytes(), &response)
+        if response.ID == 0 {
+            t.Error("expected user to have ID assigned")
+        }
+    })
+    
+    t.Run("GET /users/{id} returns user", func(t *testing.T) {
+        // First create a user
+        user := User{FirstName: "Jane", LastName: "Smith"}
+        jsonData, _ := json.Marshal(user)
+        postReq := httptest.NewRequest("POST", "/users", bytes.NewBuffer(jsonData))
+        postW := httptest.NewRecorder()
+        postHandler(postW, postReq)
+        
+        var createdUser User
+        json.Unmarshal(postW.Body.Bytes(), &createdUser)
+        
+        // Now test GET
+        getReq := httptest.NewRequest("GET", "/users/"+fmt.Sprintf("%d", createdUser.ID), nil)
+        getW := httptest.NewRecorder()
+        getHandler(getW, getReq)
+        
+        if getW.Code != http.StatusOK {
+            t.Errorf("expected status 200, got %d", getW.Code)
+        }
+    })
 }
 
-func processLine(line string) (id, result, value string) {
-	parts := strings.Split(line, "|")
-	// Ensure at least id + op + key
-	if len(parts) < 3 {
-		return safeIdx(parts, 0), "ERROR", ""
-	}
-	id = parts[0]
-	op := strings.ToUpper(parts[1])
-	key := parts[2]
-	data := parts[3]
 
-	log.Print("key ", key)
+2. Unit-Style Testing (Mock Dependencies)
+Test handlers and store separately:
 
-	switch op {
-	case "GET":
-
-		return get(key, id)
-
-	case "SET":
-		return set(parts, id, data)
-
-	case "DELETE":
-		return delete(key, id)
-
-	default:
-		return id, "ERROR", ""
-	}
+// Mock store for unit testing
+type MockUserStore struct {
+    users map[int]User
+    nextID int
 }
 
-func delete(key string, rid string) (id, result, value string) {
-	if key == "" {
-		return rid, "ERROR", ""
-	}
-	k, err := strconv.Atoi(key)
-	if err != nil {
-		return rid, "ERROR", ""
-	}
-
-	v, _ := service.Delete(k)
-	if v {
-		return rid, "OK", ""
-	}
-	return rid, "NOTFOUND", ""
+func (m *MockUserStore) AddUser(u User) (User, error) {
+    u.ID = m.nextID
+    m.nextID++
+    m.users[u.ID] = u
+    return u, nil
 }
 
-func set(parts []string, rid string, data string) (id, result, value string) {
-	if len(parts) < 4 {
-		return rid, "ERROR", ""
-	}
-	v, err := service.Set(service.Data{Id: 0, Value: data})
-	if err != nil {
-		return rid, "ERROR", ""
-	}
-
-	return rid, "OK", strconv.Itoa(v.Id)
+func (m *MockUserStore) GetUser(id int) (User, error) {
+    if user, exists := m.users[id]; exists {
+        return user, nil
+    }
+    return User{}, errors.New("user not found")
 }
 
-func get(key, rid string) (id, result, value string) {
-	if key == "" {
-		return rid, "ERROR", ""
-	}
-
-	k, err := strconv.Atoi(key)
-	if err != nil {
-		return rid, "ERROR", ""
-	}
-
-	d, err := service.Get(k)
-	if err != nil {
-
-		return rid, "NOTFOUND", ""
-	}
-	return rid, "OK", d.Value
+func TestUserHandlers_Unit(t *testing.T) {
+    mockStore := &MockUserStore{
+        users: make(map[int]User),
+        nextID: 1,
+    }
+    
+    t.Run("parseRequest parses valid JSON", func(t *testing.T) {
+        jsonData := `{"firstName":"John","lastName":"Doe"}`
+        req := httptest.NewRequest("POST", "/", strings.NewReader(jsonData))
+        
+        user, err := parseRequest(req)
+        
+        if err != nil {
+            t.Errorf("unexpected error: %v", err)
+        }
+        if user.FirstName != "John" {
+            t.Errorf("expected firstName John, got %s", user.FirstName)
+        }
+    })
+    
+    t.Run("parseRequest handles invalid JSON", func(t *testing.T) {
+        req := httptest.NewRequest("POST", "/", strings.NewReader("invalid json"))
+        
+        _, err := parseRequest(req)
+        
+        if err == nil {
+            t.Error("expected error for invalid JSON")
+        }
+    })
 }
 
-func safeIdx(parts []string, i int) string {
-	if i < len(parts) {
-		return parts[i]
-	}
-	return ""
+
+3. TCP/UDP Handler Testing
+For your network handlers:
+
+
+func TestTCPHandler(t *testing.T) {
+    // Create a test server
+    listener, err := net.Listen("tcp", ":0") // Use port 0 for random available port
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer listener.Close()
+    
+    go func() {
+        for {
+            conn, err := listener.Accept()
+            if err != nil {
+                return
+            }
+            go handleConnection(conn) // Your TCP handler
+        }
+    }()
+    
+    // Test client connection
+    conn, err := net.Dial("tcp", listener.Addr().String())
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer conn.Close()
+    
+    // Send test data
+    _, err = conn.Write([]byte("123|GET|testkey|\n"))
+    if err != nil {
+        t.Fatal(err)
+    }
+    
+    // Read response
+    buffer := make([]byte, 1024)
+    n, err := conn.Read(buffer)
+    if err != nil {
+        t.Fatal(err)
+    }
+    
+    response := string(buffer[:n])
+    if !strings.Contains(response, "OK") {
+        t.Errorf("expected OK in response, got: %s", response)
+    }
 }
 
-func InitTcpServer(tcpPort string) {
+4. Test Organization
+Create separate test files:
 
-	service.Init()
+├── user_test.go          # HTTP handler tests
+├── store_test.go         # Store/model tests  
+├── tcp_handler_test.go   # TCP protocol tests
+├── udp_handler_test.go   # UDP protocol tests
+└── integration_test.go   # End-to-end tests
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
-	var wg sync.WaitGroup
+Based on your bootcamp requirements, here are the main approaches for testing your handlers in Go:
 
-	ln, err := net.Listen("tcp", tcpPort)
-	
-	if err != nil {
-		log.Fatalf("TCP listen error: %v", err)
-	}
-	log.Printf("TCP listening on %s", tcpPort)
+1. Integration-Style Testing (Test Full Flow)
+Test your HTTP handlers with real store instances:
 
-	wg.Add(1)
+2. Unit-Style Testing (Mock Dependencies)
+Test handlers and store separately:
 
-	go func() {
-		defer wg.Done()
-		defer ln.Close()
-		for {
-			conn, err := ln.Accept()
+3. TCP/UDP Handler Testing
+For your network handlers:
 
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				log.Printf("Accept error: %v", err)
-				continue
-			}
-			go handleConn(conn)
+4. Test Organization
+Create separate test files:
 
-		}
+5. Running Tests
 
-	}()
+# Run all tests
+go test ./...
 
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
+# Run with coverage
+go test -cover ./...
 
-	}()
+# Run specific test
+go test -run TestUserHandlers_Integration
 
-	<-ctx.Done()
-	log.Println("Shutting down…")
-	wg.Wait()
-	log.Println("Bye.")
-}
+# Run tests in parallel
+go test -parallel 4
 
-func handleUDPMessage(data []byte, addr *net.UDPAddr, conn *net.UDPConn) {
-	line := strings.TrimRight(string(data), "\r\n")
-	id, result, value := processLine(line)
-	response := fmt.Sprintf("%s|%s|%s\n", id, result, value)
-	
-	if _, err := conn.WriteToUDP([]byte(response), addr); err != nil {
-		log.Printf("UDP write error: %v", err)
-	}
-}
-
-func InitUdpServer(udpPort string) {
-	service.Init()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	var wg sync.WaitGroup
-
-	addr, err := net.ResolveUDPAddr("udp", udpPort)
-	if err != nil {
-		log.Fatalf("UDP resolve error: %v", err)
-	}
-
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		log.Fatalf("UDP listen error: %v", err)
-	}
-	log.Printf("UDP listening on %s", udpPort)
-
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		defer conn.Close()
-		
-		buffer := make([]byte, 1024) // UDP message buffer
-		
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				n, clientAddr, err := conn.ReadFromUDP(buffer)
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					log.Printf("UDP read error: %v", err)
-					continue
-				}
-				
-				// Handle each UDP message in a goroutine
-				go handleUDPMessage(buffer[:n], clientAddr, conn)
-			}
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		_ = conn.Close()
-	}()
-
-	<-ctx.Done()
-	log.Println("UDP server shutting down…")
-	wg.Wait()
-	log.Println("UDP server stopped.")
-}
-
-func InitBothServers(tcpPort, udpPort string) {
-	service.Init()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	var wg sync.WaitGroup
-
-	// Start TCP server
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		InitTcpServer(tcpPort)
-	}()
-
-	// Start UDP server  
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		InitUdpServer(udpPort)
-	}()
-
-	<-ctx.Done()
-	log.Println("Shutting down both servers…")
-	wg.Wait()
-	log.Println("All servers stopped.")
-}
+Fresh state: Create new store instances per test to avoid interference
+Table-driven tests: Use t.Run() for multiple test cases
+Error cases: Test both success and failure scenarios
+Cleanup: Use defer for cleanup in tests
+Timeouts: Use testing.Timeout for network tests
+Choose integration style for confidence your full flow works, or unit style for faster, more isolated tests. Many projects use both!
