@@ -156,3 +156,99 @@ func InitTcpServer(tcpPort string) {
 	wg.Wait()
 	log.Println("Bye.")
 }
+
+func handleUDPMessage(data []byte, addr *net.UDPAddr, conn *net.UDPConn) {
+	line := strings.TrimRight(string(data), "\r\n")
+	id, result, value := processLine(line)
+	response := fmt.Sprintf("%s|%s|%s\n", id, result, value)
+	
+	if _, err := conn.WriteToUDP([]byte(response), addr); err != nil {
+		log.Printf("UDP write error: %v", err)
+	}
+}
+
+func InitUdpServer(udpPort string) {
+	service.Init()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var wg sync.WaitGroup
+
+	addr, err := net.ResolveUDPAddr("udp", udpPort)
+	if err != nil {
+		log.Fatalf("UDP resolve error: %v", err)
+	}
+
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		log.Fatalf("UDP listen error: %v", err)
+	}
+	log.Printf("UDP listening on %s", udpPort)
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		defer conn.Close()
+		
+		buffer := make([]byte, 1024) // UDP message buffer
+		
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				n, clientAddr, err := conn.ReadFromUDP(buffer)
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					log.Printf("UDP read error: %v", err)
+					continue
+				}
+				
+				// Handle each UDP message in a goroutine
+				go handleUDPMessage(buffer[:n], clientAddr, conn)
+			}
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+
+	<-ctx.Done()
+	log.Println("UDP server shutting down…")
+	wg.Wait()
+	log.Println("UDP server stopped.")
+}
+
+func InitBothServers(tcpPort, udpPort string) {
+	service.Init()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var wg sync.WaitGroup
+
+	// Start TCP server
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		InitTcpServer(tcpPort)
+	}()
+
+	// Start UDP server  
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		InitUdpServer(udpPort)
+	}()
+
+	<-ctx.Done()
+	log.Println("Shutting down both servers…")
+	wg.Wait()
+	log.Println("All servers stopped.")
+}
