@@ -244,3 +244,64 @@ Error cases: Test both success and failure scenarios
 Cleanup: Use defer for cleanup in tests
 Timeouts: Use testing.Timeout for network tests
 Choose integration style for confidence your full flow works, or unit style for faster, more isolated tests. Many projects use both!
+
+
+_______________________________________
+
+func TestUDPHandler(t *testing.T) {
+	// Create a test server bound to localhost so the client can connect
+	addr, err := net.ResolveUDPAddr("udp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	// Server loop: read UDP messages and dispatch to handler.
+	go func() {
+		buffer := make([]byte, 1024)
+		for {
+			n, clientAddr, err := listener.ReadFromUDP(buffer)
+			if err != nil {
+				return
+			}
+			// copy the received data because buffer is reused
+			data := make([]byte, n)
+			copy(data, buffer[:n])
+			go handleUDPMessage(data, clientAddr, listener)
+		}
+	}()
+
+	UDPAddr, ok := listener.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatal()
+	}
+	// Test client connection (dial UDP to the server address)
+	clientConn, err := net.DialUDP("udp", nil, UDPAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientConn.Close()
+
+	// test data
+	if _, err = clientConn.Write([]byte("123|SET||hello\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = clientConn.Write([]byte("123|GET|1|\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	respBuf := make([]byte, 1024)
+	n, err := clientConn.Read(respBuf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := string(respBuf[:n])
+	if !strings.Contains(response, "OK") {
+		t.Errorf("expected OK in response, got: %s", response)
+	}
+}
